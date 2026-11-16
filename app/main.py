@@ -1,13 +1,36 @@
-from fastapi import FastAPI 
-from pydantic import BaseModel 
+import os
+import aio_pika
+from dotenv import load_dotenv
+from fastapi import FastAPI
+from pydantic import BaseModel
 
-app = FastAPI(title="RabbitMQ Lab 7") 
+load_dotenv()
 
-class OrderRequest(BaseModel): 
-    order_id: int 
-    product: str 
-    quantity: int 
+RABBIT_URL = os.getenv("RABBIT_URL")
 
-@app.post("/orders", status_code=200) 
-async def submit_order(order: OrderRequest): 
-    return {"status": "received", "order_id": order.order_id}
+app = FastAPI(title="RabbitMQ Lab 7")
+
+
+class OrderRequest(BaseModel):
+    order_id: int
+    product: str
+    quantity: int
+    delivery_method: str
+
+
+@app.post("/orders", status_code=202)
+async def submit_order(order: OrderRequest):
+    connection = await aio_pika.connect_robust(RABBIT_URL)
+
+    async with connection:
+        channel = await connection.channel(publisher_confirms=True)
+
+        queue = await channel.declare_queue( "orders_queue", durable=True)
+        message = aio_pika.Message(
+            body=order.model_dump_json().encode(),
+            content_type="application/json",
+            delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+        )
+        await channel.default_exchange.publish(message,routing_key=queue.name)
+
+    return {"status": "queued","order_id": order.order_id}
